@@ -1,0 +1,367 @@
+#Command line code of the analyses presented in the article: "PANZOOTIC CHYTRID FUNGUS EXPLOITS DIVERSE AMPHIBIAN HOST ENVIRONMENTS THROUGH PLASTIC INFECTION STRATEGIES". María Torres-Sánchez, Jennifer Villate, Sarah McGrath-Blaser, and Ana V. Longo.
+#Corresponding author: María Torres-Sánchez (torressanchez.maria@gmail.com)
+
+##########################            ACQUIRING AND PREPARINGG FASTQ FILES            ##########################
+################################################################################################################
+
+#Input and output
+sra_file 
+fastq_file1
+fastq_file2
+fastq_file1_trimmed
+fastq_file2_trimmed
+
+#Downloading files from SRA databes
+wget $sra_file
+
+#Transforming to fastq format
+module load sra-toolkit/2.9.6
+fastq-dump --split-3 $sra_file
+
+#Checking fastq file quality
+module load fastqc/0.11.5
+fastqc $fastq_file*
+
+#Removing sequencing adaptors 
+module load trim_galore/0.6.5
+trim_galore --illumina --phred33 --fastqc --paired $fastq_file1 $fastq_file2
+
+#Trimming reads
+module load prinseq/0.20.4
+prinseq-lite.pl -fastq $fastq_file1 -out_good $fastq_file1_trimmed -out_bad null -trim_left 10 -no_qual_header 
+
+
+##########################                PREPARINGG FUNGI GENOME FILES               ##########################
+################################################################################################################
+
+#Input and output
+fna
+gff
+gtf
+cds_nuc
+cds_pep
+
+#Transforming gff file to gtf and extracting coding sequence in nucleotides and peptides
+module load gffread/0.11.8
+gffread $gff -T -o $gtf
+gffread -g $fna -w $cds_nuc $gtf
+gffread -g $fna -y $cds_pep $gtf
+
+
+##########################                     ANNOTATING BD GENOME                   ##########################
+################################################################################################################
+
+#Input and output
+seq_db1
+db1
+db2
+cds_pep
+out1
+out2
+
+#Against Uniprot
+module load blast/2.9.0
+makeblastdb -in $seq_db1 -parse_seqids -dbtype prot -out $db1
+blastp -query $cds_pep -db $db1 -out $out1 -num_threads 16 -outfmt 6
+
+#Against Pfam
+module load hmmer/3.2.1
+hmmpress $db2
+hmmsearch --tblout $out2 -E 1e-5 $db2 $cds_pep
+
+
+
+##########################           MAPPING TRANSCRIPTOMES AGAINST BD GENOME         ##########################
+################################################################################################################
+
+#Input and output
+dir
+fna
+gtf
+fastq_file1_trimmed
+fastq_file2_trimmed
+out
+
+#Building genome index and mapping and counting reads (for single library --readFilesIn fastq_file_trimmed)
+module load star/2.7.3a
+STAR --runThreadN 16 --runMode genomeGenerate --genomeDir $dir --genomeFastaFiles $fna --sjdbGTFfile $gtf --sjdbOverhang 99 --genomeSAindexNbases 11
+STAR --runMode alignReads --runThreadN 16 --genomeDir $dir --readFilesIn $fastq_file1_trimmed $fastq_file2_trimmed --outFileNamePrefix $out --outSAMtype BAM Unsorted SortedByCoordinate --outSAMunmapped Within --quantMode TranscriptomeSAM GeneCounts
+
+
+##########################             BD GENE EXPRESSION PATTERN ANALYSES            ##########################
+################################################################################################################
+
+#Input and output
+data_info
+Bd_genes
+counts
+counts_normalized
+loadingsPC1
+14amphibians_trees
+
+#Bd gene expression pattern characterization
+module load R/4.0.2
+library("DESeq2")
+library("ggplot2")
+idata <- read.table("data_info", header=TRUE)
+idata$Susceptibility <- as.factor(idata$Susceptibility)
+countData <- read.csv("counts", header=TRUE, sep=",")
+ddsHTSeq1 <- DESeqDataSetFromMatrix(countData=countData, colData=idata, design=~Susceptibility, tidy=TRUE)
+refSeq <- c("gene589", "gene2474", "gene6789")
+isControl <- rownames(ddsHTSeq1) %in% refSeq
+dds1 <- estimateSizeFactors(ddsHTSeq1, controlGenes= isControl)
+dds1 <- estimateDispersions(dds1)
+dds1 <- nbinomWaldTest(dds1)
+counts_table1=counts(dds1,normalized=TRUE)
+write.csv(counts_table1, "counts_normalized")
+vsd1 <- varianceStabilizingTransformation(dds1)
+pca1 <- princomp(assay(vsd1), cor = FALSE, scores = TRUE)
+summary(pca1)
+write.csv(pca1$loadings[,1], "loadingsPC1")
+fig2A <- qplot(x=pca1$loadings[,1],y=pca1$loadings[,3], xlab="PC1 (52.07%)", ylab="PC3 (3.94%)") + theme(panel.background = element_rect(fill = "white", colour = "black"), panel.grid.major=element_line(colour = "grey89"), legend.title = element_blank(), legend.key = element_rect(fill = "white", colour = "white"), legend.text.align = 0) + geom_point(aes(color = pdata$Genera, size = pdata$Number_expressed_genes, shape = pdata$Order)) + stat_ellipse(aes(linetype=pdata$Susceptibility),type="norm", level=0.80, colour="gray60") + scale_linetype_manual(values=c("solid", "dotdash", "dashed", "dotted"), labels=c("In culture", "Partially susceptible host", "Susceptible host", "Tolerant host")) + scale_shape_discrete(labels=c("Anura", "In culture", "Urodela"))  + scale_color_manual(values =c("#F8766D", "#DAA520", "#D2691E", "#6B8E23", "#9ACD32", "#00B81F", "#00C08D", "#00B4EF", "#7997FF", "#DC71FA", "#FF61C9"), labels=c(expression(paste(italic("Agalychnis"))),expression(paste(italic("Atelopus"))),expression(paste(italic("Craugastor"))),expression(paste(italic("Desmognathus"))),expression(paste(italic("Eleutherodactylus"))),"In culture",expression(paste(italic("Lithobates"))),expression(paste(italic("Litoria"))),expression(paste(italic("Notophthalmus"))),expression(paste(italic("Plethodon"))),expression(paste(italic("Tylototriton"))))) + scale_size_continuous(range = c(2,6)) + guides(shape = guide_legend(order = 1), col = guide_legend(order = 2), size = guide_legend(order=3), linetype = guide_legend(order=4))
+figS1A <- qplot(x=pca1$loadings[,1],y=pca1$loadings[,2], xlab="PC1 (52.07%)", ylab="PC2 (10.14%)") + theme(panel.background = element_rect(fill = "white", colour = "black"), panel.grid.major=element_line(colour = "grey89"), legend.title = element_blank(), legend.key = element_rect(fill = "white", colour = "white"), legend.text.align = 0) + geom_point(aes(color = pdata$Genera, size = pdata$Number_expressed_genes, shape = pdata$Order)) + stat_ellipse(aes(linetype=pdata$Susceptibility),type="norm", level=0.80, colour="gray60") + scale_linetype_manual(values=c("solid", "dotdash", "dashed", "dotted"), labels=c("In culture", "Partially susceptible host", "Susceptible host", "Tolerant host")) + scale_shape_discrete(labels=c("Anura", "In culture", "Urodela"))  + scale_color_manual(values =c("#F8766D", "#DAA520", "#D2691E", "#6B8E23", "#9ACD32", "#00B81F", "#00C08D", "#00B4EF", "#7997FF", "#DC71FA", "#FF61C9"), labels=c(expression(paste(italic("Agalychnis"))),expression(paste(italic("Atelopus"))),expression(paste(italic("Craugastor"))),expression(paste(italic("Desmognathus"))),expression(paste(italic("Eleutherodactylus"))),"In culture",expression(paste(italic("Lithobates"))),expression(paste(italic("Litoria"))),expression(paste(italic("Notophthalmus"))),expression(paste(italic("Plethodon"))),expression(paste(italic("Tylototriton"))))) + scale_size_continuous(range = c(2,6)) + guides(shape = guide_legend(order = 1), col = guide_legend(order = 2), size = guide_legend(order=3), linetype = guide_legend(order=4))
+figS1B <- qplot(x=pca1$loadings[,1],y=pca1$loadings[,4], xlab="PC1 (52.07%)", ylab="PC4 (3.33%)") + theme(panel.background = element_rect(fill = "white", colour = "black"), panel.grid.major=element_line(colour = "grey89"), legend.title = element_blank(), legend.key = element_rect(fill = "white", colour = "white"), legend.text.align = 0) + geom_point(aes(color = pdata$Genera, size = pdata$Number_expressed_genes, shape = pdata$Order)) + stat_ellipse(aes(linetype=pdata$Susceptibility),type="norm", level=0.80, colour="gray60") + scale_linetype_manual(values=c("solid", "dotdash", "dashed", "dotted"), labels=c("In culture", "Partially susceptible host", "Susceptible host", "Tolerant host")) + scale_shape_discrete(labels=c("Anura", "In culture", "Urodela"))  + scale_color_manual(values =c("#F8766D", "#DAA520", "#D2691E", "#6B8E23", "#9ACD32", "#00B81F", "#00C08D", "#00B4EF", "#7997FF", "#DC71FA", "#FF61C9"), labels=c(expression(paste(italic("Agalychnis"))),expression(paste(italic("Atelopus"))),expression(paste(italic("Craugastor"))),expression(paste(italic("Desmognathus"))),expression(paste(italic("Eleutherodactylus"))),"In culture",expression(paste(italic("Lithobates"))),expression(paste(italic("Litoria"))),expression(paste(italic("Notophthalmus"))),expression(paste(italic("Plethodon"))),expression(paste(italic("Tylototriton"))))) + scale_size_continuous(range = c(2,6)) + guides(shape = guide_legend(order = 1), col = guide_legend(order = 2), size = guide_legend(order=3), linetype = guide_legend(order=4))
+figS1C <- qplot(x=pca1$loadings[,1],y=pca1$loadings[,5], xlab="PC1 (52.07%)", ylab="PC5 (2.76%)") + theme(panel.background = element_rect(fill = "white", colour = "black"), panel.grid.major=element_line(colour = "grey89"), legend.title = element_blank(), legend.key = element_rect(fill = "white", colour = "white"), legend.text.align = 0) + geom_point(aes(color = pdata$Genera, size = pdata$Number_expressed_genes, shape = pdata$Order)) + stat_ellipse(aes(linetype=pdata$Susceptibility),type="norm", level=0.80, colour="gray60") + scale_linetype_manual(values=c("solid", "dotdash", "dashed", "dotted"), labels=c("In culture", "Partially susceptible host", "Susceptible host", "Tolerant host")) + scale_shape_discrete(labels=c("Anura", "In culture", "Urodela"))  + scale_color_manual(values =c("#F8766D", "#DAA520", "#D2691E", "#6B8E23", "#9ACD32", "#00B81F", "#00C08D", "#00B4EF", "#7997FF", "#DC71FA", "#FF61C9"), labels=c(expression(paste(italic("Agalychnis"))),expression(paste(italic("Atelopus"))),expression(paste(italic("Craugastor"))),expression(paste(italic("Desmognathus"))),expression(paste(italic("Eleutherodactylus"))),"In culture",expression(paste(italic("Lithobates"))),expression(paste(italic("Litoria"))),expression(paste(italic("Notophthalmus"))),expression(paste(italic("Plethodon"))),expression(paste(italic("Tylototriton"))))) + scale_size_continuous(range = c(2,6)) + guides(shape = guide_legend(order = 1), col = guide_legend(order = 2), size = guide_legend(order=3), linetype = guide_legend(order=4))
+figS2A <- qplot(x=pca1$loadings[,1],y=pca1$loadings[,2], xlab="PC1 (52.07%)", ylab="PC2 (10.14%)") + theme(panel.background = element_rect(fill = "white", colour = "black"), panel.grid.major=element_line(colour = "grey89"), legend.title = element_blank(), legend.key = element_rect(fill = "white", colour = "white"), legend.text.align = 0) + geom_point(aes(color = pdata$BioProject, size = pdata$Transcriptome_sizeMb, shape = pdata$Experminent_category)) + scale_size_continuous(range = c(2.5,7))
+figS2B <- qplot(x=pca1$loadings[,1],y=pca1$loadings[,3], xlab="PC1 (52.07%)", ylab="PC3 (3.94%)") + theme(panel.background = element_rect(fill = "white", colour = "black"), panel.grid.major=element_line(colour = "grey89"), legend.title = element_blank(), legend.key = element_rect(fill = "white", colour = "white"), legend.text.align = 0) + geom_point(aes(color = pdata$BioProject, size = pdata$Transcriptome_sizeMb, shape = pdata$Experminent_category)) + scale_size_continuous(range = c(2.5,7))
+figS2C <- qplot(x=pca1$loadings[,1],y=pca1$loadings[,4], xlab="PC1 (52.07%)", ylab="PC4 (3.33%)") + theme(panel.background = element_rect(fill = "white", colour = "black"), panel.grid.major=element_line(colour = "grey89"), legend.title = element_blank(), legend.key = element_rect(fill = "white", colour = "white"), legend.text.align = 0) + geom_point(aes(color = pdata$BioProject, size = pdata$Transcriptome_sizeMb, shape = pdata$Experminent_category)) + scale_size_continuous(range = c(2.5,7))
+figS2D <- qplot(x=pca1$loadings[,1],y=pca1$loadings[,5], xlab="PC1 (52.07%)", ylab="PC5 (2.76%)") + theme(panel.background = element_rect(fill = "white", colour = "black"), panel.grid.major=element_line(colour = "grey89"), legend.title = element_blank(), legend.key = element_rect(fill = "white", colour = "white"), legend.text.align = 0) + geom_point(aes(color = pdata$BioProject, size = pdata$Transcriptome_sizeMb, shape = pdata$Experminent_category)) + scale_size_continuous(range = c(2.5,7))
+figS3A <- qplot(x=pca1$loadings[,1],y=pca1$loadings[,2], xlab="PC1 (52.07%)", ylab="PC2 (10.14%)") + theme(panel.background = element_rect(fill = "white", colour = "black"), panel.grid.major=element_line(colour = "grey89"), legend.title = element_blank(), legend.key = element_rect(fill = "white", colour = "white"), legend.text.align = 0) + geom_point(aes(color = pdata$Bd_strain, shape = pdata$Experminent_category), size= 3)
+figS3B <- qplot(x=pca1$loadings[,1],y=pca1$loadings[,3], xlab="PC1 (52.07%)", ylab="PC3 (3.94%)") + theme(panel.background = element_rect(fill = "white", colour = "black"), panel.grid.major=element_line(colour = "grey89"), legend.title = element_blank(), legend.key = element_rect(fill = "white", colour = "white"), legend.text.align = 0) + geom_point(aes(color = pdata$Bd_strain, shape = pdata$Experminent_category), size= 3)
+figS3C <- qplot(x=pca1$loadings[,1],y=pca1$loadings[,4], xlab="PC1 (52.07%)", ylab="PC4 (3.33%)") + theme(panel.background = element_rect(fill = "white", colour = "black"), panel.grid.major=element_line(colour = "grey89"), legend.title = element_blank(), legend.key = element_rect(fill = "white", colour = "white"), legend.text.align = 0) + geom_point(aes(color = pdata$Bd_strain, shape = pdata$Experminent_category), size= 3)
+figS3D <- qplot(x=pca1$loadings[,1],y=pca1$loadings[,5], xlab="PC1 (52.07%)", ylab="PC5 (2.76%)") + theme(panel.background = element_rect(fill = "white", colour = "black"), panel.grid.major=element_line(colour = "grey89"), legend.title = element_blank(), legend.key = element_rect(fill = "white", colour = "white"), legend.text.align = 0) + geom_point(aes(color = pdata$Bd_strain, shape = pdata$Experminent_category), size= 3)
+
+#Repeatability of the general Bd gene expression pattern
+module load R/4.0.2
+library("rptR")
+rep <- rpt(loadingsPC1 ~ (1 | Sp), grname= "Sp", data=loadingsPC1, datatype= "Gaussian", nboot=10000, npermut=10000)
+summary(rep)
+tapply(loadingsPC1$loadingsPC1, loadingsPC1$Sp, summary)
+
+#Correlations between the species mean PC1 loadings and host susceptibility category and BioProject
+module load R/4.0.2
+library("ggsignif")
+library("ggplot2")
+tapply(loadingsPC1$loadingsPC1, loadingsPC1$Susceptibility, summary)
+loadingsPC1$Susceptibility <- as.factor(loadingsPC1$Susceptibility)
+summary(aov(loadingsPC1~Susceptibility, data=loadingsPC1))
+TukeyHSD(aov(loadingsPC1~Susceptibility, data=loadingsPC1))
+figS2B <- ggplot(loadingsPC1, aes(x= factor(Susceptibility, level = c("In_culture", "Susceptible_host", "Partially_susceptible_host", "Tolerant_host")), y = loadingsPC1)) + geom_boxplot(outlier.shape = NA) + geom_jitter(aes(colour=Sp)) + theme(panel.background = element_rect(fill = "white", colour = "black"), panel.grid.major=element_line(colour = "grey89")) + xlab("") + ylab("PC1 loading") + geom_signif(comparisons = list(c("Susceptible_host", "Partially_susceptible_host"), c("Susceptible_host", "Tolerant_host"),c("In_culture", "Susceptible_host"), c("In_culture", "Partially_susceptible_host"), c("In_culture", "Tolerant_host")), map_signif_level=TRUE, step_increase = .1) + theme(panel.background = element_rect(fill = "white", colour = "black"), panel.grid.major=element_line(colour = "grey89"), legend.title = element_blank(), legend.key = element_rect(fill = "white", colour = "white"), legend.text.align = 0) + scale_color_manual(values= c("#F8766D", "#E58700", "#C99800", "#A3A500", "#6BB100", "#00BA38", "#00BF7D", "#00C0AF", "#00BCD8", "#00B0F6", "#619CFF", "#B983FF", "#E76BF3", "#FD61D1", "#FF67A4"),labels=c(expression(paste(italic("Agalychnis callidryas"))), expression(paste(italic("Agalychnis lemur"))), expression(paste(italic("Atelopus glyphus"))), expression(paste(italic("Atelopus zeteki"))),expression(paste(italic("Craugastor fitzingeri"))),expression(paste(italic("Desmognathus auriculatus"))),expression(paste(italic("Eleutherodactylus coqui"))),"In culture",expression(paste(italic("Lithobates catesbeianus"))), expression(paste(italic("Lithobates sylvatica"))), expression(paste(italic("Lithobates yavapaiensis"))),expression(paste(italic("Litoria verreauxii alpina"))),expression(paste(italic("Notophthalmus viridescens"))),expression(paste(italic("Plethodon cinereus"))),expression(paste(italic("Tylototriton wenxianensis"))))) + scale_x_discrete(labels=c("In culture", "Susceptible", "Partially susceptible", "Non-susceptible"))
+figS4 <- ggplot(loadingsPC1, aes(x= factor(BioProject), y = loadingsPC1)) + geom_boxplot(outlier.shape = NA) + geom_jitter(aes(colour=Sp)) + theme(panel.background = element_rect(fill = "white", colour = "black"), panel.grid.major=element_line(colour = "grey89"), axis.text.x = element_text(size=9, angle=90)) + xlab("BioProject") + ylab("PC1 loading")
+
+#Quantifying phylogenetic signal
+module load R/4.0.2
+library("phytools")
+trees <- read.nexus("14amphibians_trees")
+tree <- consensus.edges(trees,if.absent="ignore", consensus.tree=consensus(trees,p=1))
+meanloadingsPC1 <- read.table("meanloadingsPC1_perSpecies", header=TRUE, row.names=1)
+meanloadingsPC1$Susceptibility <- as.factor(meanloadingsPC1$Susceptibility)
+phyMeanPC1 <- meanloadingsPC1[tree$tip.label, "mean_loadingsPC1"]
+k_phylosig <- phylosig(tree = tree, x = phyMeanPC1, method = "K", test = TRUE, nsim=1000000)
+k_phylosig
+l_phylosig <- phylosig(tree = tree, x = phyMeanPC1, method = "lambda", test = TRUE)
+l_phylosig
+cat <- as.factor(setNames(data_info[,6],rownames(data_info)))
+figS5 <- dotTree(tree, cat, colors=setNames(c("black","gray49","gray89"), c("Susceptible_host", "Partially_susceptible_host", "Tolerant_host")), ftype="i", fsize=0.7)
+
+
+##########################            DIFFERENTIAL GENE EXPRESSION ANALYSES           ##########################
+################################################################################################################
+
+#Input and output
+dds1
+table_up
+DEG_Bd_zoospore_vs_sporangia
+dataSporangia
+dataZoospores
+
+#DEG in culture vs in vivo 
+module load R/4.0.2
+library("DESeq2")
+library("ggplot2")
+library("eulerr")
+res1 <- results(dds1, contrast=c("Susceptibility","Susceptible_host", "In_culture"))
+res1 <- res1[order(res1$padj),]  
+hits1=rownames(res1[(res1$padj <= 0.05) & (!is.na(res1$padj)) & (abs(res1$log2FoldChange) >= 1),])
+hitsUP1=rownames(res1[(res1$padj <= 0.05) & (!is.na(res1$padj)) & (res1$log2FoldChange >= 1),])
+hitsDOWN1=rownames(res1[(res1$padj <= 0.05) & (!is.na(res1$padj)) & (res1$log2FoldChange <= -1),])
+length(hits1)
+length(hitsUP1)
+length(hitsDOWN1)
+res2 <- results(dds1, contrast=c("Susceptibility","Partially_susceptible_host", "In_culture"))
+res2 <- res2[order(res2$padj),]  
+hits2=rownames(res2[(res2$padj <= 0.05) & (!is.na(res2$padj)) & (abs(res2$log2FoldChange) >= 1),])
+hitsUP2=rownames(res2[(res2$padj <= 0.05) & (!is.na(res2$padj)) & (res2$log2FoldChange >= 1),])
+hitsDOWN2=rownames(res2[(res2$padj <= 0.05) & (!is.na(res2$padj)) & (res2$log2FoldChange <= -1),])
+length(hits2)
+length(hitsUP2)
+length(hitsDOWN2)
+res3 <- results(dds1, contrast=c("Susceptibility","Tolerant_host", "In_culture"))
+res3 <- res3[order(res3$padj),]  
+hits3=rownames(res3[(res3$padj <= 0.05) & (!is.na(res3$padj)) & (abs(res3$log2FoldChange) >= 1),])
+hitsUP3=rownames(res3[(res3$padj <= 0.05) & (!is.na(res3$padj)) & (res3$log2FoldChange >= 1),])
+hitsDOWN3=rownames(res3[(res3$padj <= 0.05) & (!is.na(res3$padj)) & (res3$log2FoldChange <= -1),])
+length(hits3)
+length(hitsUP3)
+length(hitsDOWN3)
+input_vennUP_susceptibility <- list(hitsUP3, hitsUP2, hitsUP1)
+names(input_vennUP_susceptibility) <- c("Tolerant_host", "Partially_susceptible_host", "Susceptible_host")
+input_vennDOWN_susceptibility <- list(hitsDOWN3, hitsDOWN2, hitsDOWN1)
+names(input_vennDOWN_susceptibility) <- c("Tolerant_host", "Partially_susceptible_host", "Susceptible_host")
+eulerDOWN_susceptibility <- euler(input_vennDOWN_susceptibility)
+fig3a <- plot(eulerDOWN_susceptibility, fills= c("white", "slategray2", "royalblue1"), quantities=list(fontsize=12), legend=list(side="right", labels=c("Tolerant host","Partially susceptible host", "Susceptible host")))
+eulerUP_susceptibility <- euler(input_vennUP_susceptibility)
+fig3b <- plot(eulerUP_susceptibility, fills= c("white", "wheat1", "tomato"), quantities=list(fontsize=12), legend=list(side="right", labels=c("Tolerant host","Partially susceptible host", "Susceptible host")))
+write.csv(res1, "results_DEG_Bd_in_culture_vs_susceptible_host.csv")
+write.csv(res2, "results_DEG_Bd_in_culture_vs_partially_susceptible_host.csv")
+write.csv(res3, "results_DEG_Bd_in_culture_vs_tolerant_host.csv")
+
+#DEG zoospore vs_sporangia
+module load R/4.0.2
+library("DESeq2")
+library("ggplot2")
+res4 <- results(dds1, contrast=c("lifeCycle","Sporangia", "Zoospore"))
+res4 <- res4[order(res4$padj),]  
+hits7=rownames(res4[(res4$padj <= 0.05) & (!is.na(res4$padj)) & (abs(res4$log2FoldChange) >= 1),])
+hitsUP4=rownames(res7[(res4$padj <= 0.05) & (!is.na(res4$padj)) & (res4$log2FoldChange >= 1),])
+hitsDOWN4=rownames(res7[(res4$padj <= 0.05) & (!is.na(res4$padj)) & (res4$log2FoldChange <= -1),])
+length(hits4)
+length(hitsUP4)
+length(hitsDOWN4)
+write.csv(res4, "DEG_Bd_zoospore_vs_sporangia")
+
+#Abundance of sporangia versus zoospore related genes in virulence or defense/transmission gene categories
+library("rcompanion")
+chisq.test(dataSporangia$Potential_gene_category, dataSporangia$Life_stage_signature)
+chisq.test(dataZoospores$Potential_gene_category, dataZoospores$Life_stage_signature)
+cramerV(table(dataSporangia$Potential_gene_category, dataSporangia$Life_stage_signature))
+cramerV(table(dataZoospores$Potential_gene_category, dataZoospores$Life_stage_signature))
+
+
+##########################       VARIANT CALLING AND PHYLOGENIMICS OF BD ISOLATES     ##########################
+################################################################################################################
+
+#Input and output
+alignment_per_sample_folder/
+merged_alignment
+merged_alignment_splitntrim
+cds_nuc
+vcf
+phylip
+besttree
+bootstraptrees
+loadingsPC1
+Bd_isolate
+Host_susceptibility
+
+#Preparing alignment files: adding Read Group, sorting, marking duplicates, merging, building index, and validating alignment file
+module load picard/2.25.5
+for file in alignment_per_sample_folder/*; do picard AddOrReplaceReadGroups I=$file O="$(basename $file .bam)_RG.bam" RGID="$(basename $file .bam)" RGLB="$(basename $file .bam)_library" RGPL=illumina RGPU=1lane RGSM="$(basename $file .bam)"; done
+for file in alignment_per_sample_folder/*_RG.bam; do picard SortSam I=$file O="$(basename $file .bam)_sorted.bam" SORT_ORDER=coordinate; done
+for file in alignment_per_sample_folder/*_RG_sorted.bam; do picard MarkDuplicates I=$file O="$(basename $file .bam)_markedDup.bam" M="$(basename $file .bam)_dupMetrics.txt"; done
+picard MergeSamFiles I=alignment_per_sample_folder/*_RG_sorted_markedDup.bam O=merged_alignment
+picard BuildBamIndex I=merged_alignment
+picard ValidateSamFile I=merged_alignment MODE=VERBOSE R=cds_nuc IGNORE=INVALID_TAG_NM IGNORE=MISSING_TAG_NM 
+
+#Variants detection
+module load gatk/4.1.9.0
+module load samtools/1.12  
+gatk CreateSequenceDictionary -R cds_nuc
+samtools faidx cds_nuc
+gatk SplitNCigarReads -R cds_nuc -I merged_alignment -O merged_alignment_splitntrim
+gatk HaplotypeCaller -R cds_nuc -I merged_alignment_splitntrim -O vcf --dont-use-soft-clipped-bases true -stand-call-conf 20.0
+
+#Maximum likelihood phylogenetic reconstruction
+module load python/3.8
+python vcf2phylip.py -i vcf
+module load raxml-ng/1.0.2
+raxml-ng --msa phylip --model GTR+G --seed 2 --threads 2 --tree pars{25},rand{25}
+raxml-ng --bootstrap --msa phylip --model GTR+G --seed 2 --threads 2 --bs-trees 1000 --blopt nr_safe
+raxml-ng --support --tree besttree --bs-trees bootstraptrees --threads 2 
+
+#Quantifying phylogenetic signal
+module load R/4.0.2
+library("phytools")
+tree <- read.tree("besttree")
+loadingsPC1 <- read.table("loadingsPC1", header=TRUE, row.names=1)
+phyLoadingsPC1 <- loadingsPC1[tree$tip.label, "loadingsPC1"]
+k_phylosig <- phylosig(tree = tree, x = phyLoadingsPC1, method = "K", test = TRUE, nsim=1000000)
+k_phylosig
+l_phylosig <- phylosig(tree = tree, x = phyLoadingsPC1, method = "lambda", test = TRUE)
+l_phylosig
+
+#Plotting tree of Bd isolates in vivo 
+module load R/4.0.2
+library(phytools)
+library("ggplot2")
+library("ggtree")
+library(ggnewscale)
+tree <- read.tree("besttree")
+Bd_isolate <- read.table("Bd_isolate",header=TRUE, row.names=1, stringsAsFactors = FALSE)
+Bd_isolate$Isolate <- as.character(Bd_isolate$Isolate)
+Host_susceptibility <- read.table("Host_susceptibility",header=TRUE, row.names=1, stringsAsFactors = FALSE)
+Host_susceptibility$Susceptibility <- as.character(Host_susceptibility$Susceptibility)
+tree <- ggtree(tree, layout = "circular", branch.length="none") + geom_tiplab(size=3)
+p1 <- gheatmap(tree,Bd_isolate,offset = 10, width = 0.1,font.size = 0) + scale_fill_discrete(name ="")
+p2 <- p1 + new_scale_fill()
+susceptibility <- c("gray49", "black", "gray89")
+figS6 <- gheatmap(p2,Host_susceptibility,offset = 13, width = 0.1,font.size = 0) + scale_fill_manual(values=susceptibility, name ="")
+
+
+#####################                       MOLECULAR EVOLUTION ANALYSES                   #####################
+################################################################################################################
+
+#Input and output
+fungi_pep
+dataDup
+13fungi_tree
+fa
+phy
+tree
+prefix
+Bd_genes
+Bd_specific_genes
+Bd_genes_with_fungal_homologs
+
+#Fungal genome completeness percentage
+module load busco/5.3.0
+busco -m protein -i fungi_pep --auto-lineage-euk
+
+#Orthology inference
+module load orthofinder/2.3.11
+orthofinder -f fungi_pep -M msa -T raxml-ng
+
+#Plotting gene duplications in the 13 fungi phylogeny
+module load R/4.0.2
+library(phytools)
+library("ggplot2")
+library("ggtree")
+13fungi_tree <- read.tree("13fungi_tree")
+dupAll <- setNames(dataDup[,1],rownames(dataDup))
+objAll <- contMap(13fungi_tree,dupAll,plot=FALSE)
+objAll <- setMap(objAll,invert=TRUE)
+dupBd <- setNames(dataDup[,2],rownames(dataDup))
+objBd <- contMap(13fungi_tree,dupBd,plot=FALSE)
+objBd <- setMap(objBd,invert=TRUE)
+dupBd_invasion <- setNames(dataDup[,3],rownames(dataDup))
+objBd_invasion <- contMap(13fungi_tree,dupBd_invasion,plot=FALSE)
+objBd_invasion <- setMap(objBd_invasion,invert=TRUE)
+dupBd_defense <- setNames(dataDup[,4],rownames(dataDup))
+objBd_defense <- contMap(13fungi_tree,dupBd_defense,plot=FALSE)
+objBd_defense <- setMap(objBd_defense,invert=TRUE)
+dupBd_virulence <- setNames(dataDup[,5],rownames(dataDup))
+objBd_virulence <- contMap(13fungi_tree,dupBd_virulence,plot=FALSE)
+objBd_virulence <- setMap(objBd_virulence,invert=TRUE)
+figS7A <- plot(objAll,fsize=c(1,0.8),outline=FALSE,lwd=c(7,7),leg.txt="Gene duplications")
+figS7B <- plot(objBd,fsize=c(1,0.8),outline=FALSE,lwd=c(7,7),leg.txt="Gene duplications")
+figS7C <- plot(objBd_virulence,fsize=c(1,0.8),outline=FALSE,lwd=c(7,7),leg.txt="Gene duplications")
+figS7D <- plot(objBd_defense,fsize=c(1,0.8),outline=FALSE,lwd=c(7,7),leg.txt="Gene duplications")
+fig4 <- plot(objBd_invasion,fsize=c(1,0.8),outline=FALSE,lwd=c(7,7),leg.txt="Gene duplications")
+
+#%GC and codon usage of Bd-specific genes versus genes with homologs across the fungi phylogeny
+module load emboss/6.6.0
+infoseq Bd_genes
+cusp Bd_specific_genes
+cusp Bd_genes_with_fungal_homologs
+codcmp
+
