@@ -13,7 +13,7 @@ The txt file (Torres-Sanchez_et_al_Bd_gene_expression_across_hosts_FileS2.txt) c
 
 ### Citation
 
-When using the alignment data please cite the following paper:  
+When using the data or the code please cite the following paper:  
 Torres-Sánchez et al. (2022). Panzootic chytrid fungus exploits diverse amphibian host environments through plastic infection strategies. Molecular Ecology. https://onlinelibrary.wiley.com/doi/10.1111/mec.16601
 
 
